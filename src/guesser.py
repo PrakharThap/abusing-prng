@@ -19,3 +19,14 @@ def flip_until(prng: PRNG, num: int):
         n += 1
 
     return n
+
+
+def avg_flip_until(prng, num, iters=1000):
+    avg = 0
+    for _ in range(iters):
+        avg += flip_until(prng, num)
+    avg /= iters
+
+    print(f"Avg # flips for {num} correct guesses in a row: {avg}")
+
+    return avg
