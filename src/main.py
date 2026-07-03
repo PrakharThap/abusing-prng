@@ -1,11 +1,13 @@
-import random
+import sys
+import os
 
-from guesser import *
-from prng import *
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from gui import main as gui_main
 
 
 def main():
-    pass
+    gui_main()
 
 
 if __name__ == "__main__":

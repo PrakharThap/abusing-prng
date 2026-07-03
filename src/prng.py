@@ -1,15 +1,27 @@
 from abc import abstractmethod
+from typing import Self
+from functools import partial
 from enum import Enum
+
 
 class Flip(Enum):
     HEADS = 0
     TAILS = 1
+
+    @classmethod
+    def BIT_INTERPRETER(cls, val: int, bit: int) -> "Flip":
+        return cls.HEADS if (val >> bit) & 1 else cls.TAILS
+
+    @classmethod
+    def THRESHOLD_INTERPRETER(cls, val: int, threshold: int) -> "Flip":
+        return cls.HEADS if val >= threshold else cls.TAILS
 
 
 class PRNG:
     def __init__(self, seed: int) -> None:
         self.initial_seed = seed
         self.seed = seed
+        self.interpreter = None
 
     @abstractmethod
     def sub_init(self) -> None:
@@ -31,6 +43,11 @@ class PRNG:
         pass
 
     @property
+    @abstractmethod
+    def current_flip(self) -> Flip:
+        return self.interpreter(val=self.seed)
+
+    @property
     def current_seed(self) -> int:
         return self.seed
 
@@ -45,6 +62,10 @@ class MiddleSquare(PRNG):
         super().__init__(seed)
         self.digits = len(str(self.seed))
         self._cycle_detected = False
+
+        self.interpreter = partial(
+            Flip.THRESHOLD_INTERPRETER, threshold=(10**self.digits) // 2
+        )
 
     @property
     def next_value(self) -> int:
@@ -64,6 +85,8 @@ class LCG(PRNG):
         self.m = m
         self.a = a
         self.c = c
+
+        self.interpreter = partial(Flip.BIT_INTERPRETER, bit=m.bit_count() - 1)
 
     @property
     def next_value(self) -> int:
