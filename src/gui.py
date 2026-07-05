@@ -443,7 +443,7 @@ class ConfigScreen:
             m = self.m_field.value()
             a = self.lcg_a_field.value()
             c = self.lcg_c_field.value()
-            if m is None or a is None or c is None or m <= 0 or a <= 0 or c <= 0:
+            if m is None or a is None or c is None or m <= 0 or a <= 0 or c < 0:
                 self.error = "All LCG parameters must be positive integers"
                 return ("continue", None)
             params = {"m": m, "a": a, "c": c}
@@ -494,7 +494,9 @@ class ConfigScreen:
             self.lcg_a_field.draw(self.screen)
             self.lcg_c_field.draw(self.screen)
         elif t == "Xorshift":
-            Label("Default: a=13, b=7, c=17", 18, Colors.DIM, WIDTH // 2, 370).draw(self.screen)
+            Label("Default: a=13, b=7, c=17", 18, Colors.DIM, WIDTH // 2, 370).draw(
+                self.screen
+            )
             self.srg_a_field.draw(self.screen)
             self.srg_b_field.draw(self.screen)
             self.srg_c_field.draw(self.screen)

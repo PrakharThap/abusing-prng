@@ -85,7 +85,8 @@ class LCG(PRNG):
         self.a = a
         self.c = c
 
-        self.interpreter = partial(Flip.BIT_INTERPRETER, bit=m.bit_count() - 1)
+        print(m.bit_length())
+        self.interpreter = partial(Flip.BIT_INTERPRETER, bit=m.bit_length() - 2)
 
     @property
     def next_value(self) -> int:
