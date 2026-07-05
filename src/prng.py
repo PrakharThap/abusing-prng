@@ -1,5 +1,4 @@
 from abc import abstractmethod
-from typing import Self
 from functools import partial
 from enum import Enum
 

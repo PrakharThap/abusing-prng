@@ -310,11 +310,22 @@ class MainMenu:
             Label("Coming soon!", 26, Colors.YELLOW, WIDTH // 2, 560).draw(self.screen)
 
 
+LCG_PRESETS = [
+    {"name": "RANDU", "m": 2**31, "a": 65539, "c": 0},
+    {"name": "glibc", "m": 2**31, "a": 1103515245, "c": 12345},
+    {"name": "MINSTD", "m": 2**31 - 1, "a": 16807, "c": 0},
+    {"name": "MSVC", "m": 2**31, "a": 214013, "c": 2531011},
+]
+
+
 class ConfigScreen:
     def __init__(self, screen):
         self.screen = screen
         cx = WIDTH // 2
         field_w, field_h = 240, 36
+        preset_count = len(LCG_PRESETS)
+        pw, pg = 130, 10
+        total_pw = preset_count * pw + (preset_count - 1) * pg
 
         self.type_toggle = Toggle(
             pygame.Rect(cx - 160, 240, 320, 44), ["Middle Square", "LCG"]
@@ -324,33 +335,39 @@ class ConfigScreen:
             pygame.Rect(cx - field_w // 2, 310, field_w, field_h), "Seed", "675248"
         )
         self.m_field = InputField(
-            pygame.Rect(cx - field_w // 2, 390, field_w, field_h),
+            pygame.Rect(cx - field_w // 2, 450, field_w, field_h),
             "Modulus (m)",
             "2147483648",
         )
         self.a_field = InputField(
-            pygame.Rect(cx - field_w // 2, 450, field_w, field_h),
+            pygame.Rect(cx - field_w // 2, 510, field_w, field_h),
             "Multiplier (a)",
             "1103515245",
         )
         self.c_field = InputField(
-            pygame.Rect(cx - field_w // 2, 510, field_w, field_h),
+            pygame.Rect(cx - field_w // 2, 570, field_w, field_h),
             "Increment (c)",
             "12345",
         )
         self.fields = [self.seed_field, self.m_field, self.a_field, self.c_field]
         self.error = ""
+        self.preset_idx = 1
+
+        self.preset_rects = []
+        x0 = cx - total_pw // 2
+        for i in range(preset_count):
+            self.preset_rects.append(pygame.Rect(x0 + i * (pw + pg), 400, pw, 36))
 
         btn_w, btn_h = 180, 50
         self.start_btn = Button(
-            pygame.Rect(cx - btn_w - 15, 590, btn_w, btn_h),
+            pygame.Rect(cx - btn_w - 15, 640, btn_w, btn_h),
             "Start",
             Colors.GREEN,
             (80, 240, 100),
             Colors.BLACK,
         )
         self.back_btn = Button(
-            pygame.Rect(cx + 15, 590, btn_w, btn_h),
+            pygame.Rect(cx + 15, 640, btn_w, btn_h),
             "Back",
             Colors.SURFACE,
             Colors.SURFACE_HOVER,
@@ -376,6 +393,15 @@ class ConfigScreen:
                 return ("menu", None)
             if e.type == pygame.KEYDOWN and e.key == pygame.K_RETURN:
                 return self._try_start()
+            if e.type == pygame.MOUSEBUTTONDOWN and e.button == 1:
+                if self.type_toggle.value() == "LCG":
+                    for i, r in enumerate(self.preset_rects):
+                        if r.collidepoint(e.pos):
+                            p = LCG_PRESETS[i]
+                            self.m_field.text = str(p["m"])
+                            self.a_field.text = str(p["a"])
+                            self.c_field.text = str(p["c"])
+                            self.preset_idx = i
         return ("continue", None)
 
     def _try_start(self):
@@ -414,11 +440,25 @@ class ConfigScreen:
 
         is_lcg = self.type_toggle.value() == "LCG"
         if is_lcg:
+            Label("Presets", 20, Colors.GRAY, WIDTH // 2, 383).draw(self.screen)
+            for i, (p, r) in enumerate(zip(LCG_PRESETS, self.preset_rects)):
+                if i == self.preset_idx:
+                    pygame.draw.rect(
+                        self.screen, Colors.ACCENT_DARK, r, border_radius=6
+                    )
+                    pygame.draw.rect(self.screen, Colors.ACCENT, r, 2, border_radius=6)
+                else:
+                    pygame.draw.rect(self.screen, Colors.SURFACE, r, border_radius=6)
+                    pygame.draw.rect(self.screen, Colors.DIM, r, 2, border_radius=6)
+                f = pygame.font.Font(None, 22)
+                c = Colors.WHITE if i == self.preset_idx else Colors.GRAY
+                img = f.render(p["name"], True, c)
+                self.screen.blit(img, img.get_rect(center=r.center))
             self.m_field.draw(self.screen)
             self.a_field.draw(self.screen)
             self.c_field.draw(self.screen)
         else:
-            y = 400
+            y = 420
             Label("LCG-specific fields not needed", 20, Colors.DIM, WIDTH // 2, y).draw(
                 self.screen
             )
@@ -427,7 +467,7 @@ class ConfigScreen:
             )
 
         if self.error:
-            Label(self.error, 22, Colors.RED, WIDTH // 2, 560).draw(self.screen)
+            Label(self.error, 22, Colors.RED, WIDTH // 2, 620).draw(self.screen)
 
         self.start_btn.draw(self.screen)
         self.back_btn.draw(self.screen)
@@ -444,25 +484,27 @@ class Game:
 
         self.streak = 0
         self.total_flips = 0
-        self.skip_count = 0
+        self.skip_buffer = ""
+        self.round_skips = 1
         self.last_result: Optional[Flip] = None
         self.last_guess: Optional[Flip] = None
         self.message = ""
         self.won = False
-        self.state = "idle"
+        self.state = "skip_input"
 
         self.coin = Coin(*COIN_CENTER, COIN_RADIUS)
 
     def reset(self):
         self.streak = 0
         self.total_flips = 0
-        self.skip_count = 0
+        self.skip_buffer = ""
+        self.round_skips = 1
         self.last_result = None
         self.last_guess = None
         self.message = ""
         self.won = False
         self.prng.reset(self.seed)
-        self.state = "idle"
+        self.state = "skip_input"
 
     def _advance_prng(self, n):
         for _ in range(n):
@@ -470,7 +512,7 @@ class Game:
 
     def guess(self, side):
         self.last_guess = side
-        self._advance_prng(self.skip_count)
+        self._advance_prng(self.round_skips)
         result = self.prng.current_flip
         print(self.prng.current_seed)
         self.last_result = result
@@ -486,19 +528,32 @@ class Game:
             return ("menu", None)
         if self.state == "flipping":
             return ("continue", None)
-        if event.key == pygame.K_r and self.won:
-            self.reset()
-            return ("continue", None)
         if self.won:
+            if event.key == pygame.K_r:
+                self.reset()
             return ("continue", None)
-        if event.key == pygame.K_h:
-            self.guess(Flip.HEADS)
-        elif event.key == pygame.K_t:
-            self.guess(Flip.TAILS)
-        elif event.key == pygame.K_UP:
-            self.skip_count += 1
-        elif event.key == pygame.K_DOWN:
-            self.skip_count = max(0, self.skip_count - 1)
+
+        if self.state == "skip_input":
+            if event.key == pygame.K_RETURN:
+                raw = self.skip_buffer.strip()
+                self.round_skips = max(1, int(raw) if raw else 1)
+                self.skip_buffer = ""
+                self.state = "guess_input"
+            elif event.key == pygame.K_BACKSPACE:
+                self.skip_buffer = self.skip_buffer[:-1]
+            else:
+                ch = event.unicode
+                if ch.isdigit():
+                    self.skip_buffer += ch
+        elif self.state == "guess_input":
+            if event.key == pygame.K_h:
+                self.guess(Flip.HEADS)
+            elif event.key == pygame.K_t:
+                self.guess(Flip.TAILS)
+        elif self.state == "result":
+            if event.key in (pygame.K_SPACE, pygame.K_RETURN):
+                self.state = "skip_input"
+
         return ("continue", None)
 
     def update(self):
@@ -541,13 +596,31 @@ class Game:
 
         self.coin.draw(self.screen)
 
-        c = Colors.YELLOW if self.skip_count > 0 else Colors.GRAY
-        Label(f"Iteration Skips:  {self.skip_count}", 28, c, WIDTH // 2, 430).draw(
-            self.screen
-        )
-        Label("(UP / DOWN to adjust)", 18, Colors.DIM, WIDTH // 2, 458).draw(
-            self.screen
-        )
+        if self.state == "skip_input":
+            cursor = "▌" if (pygame.time.get_ticks() // 500) % 2 else " "
+            hint = f"Iterations to skip (min 1):  {self.skip_buffer}{cursor}"
+            Label(hint, 28, Colors.YELLOW, WIDTH // 2, 430).draw(self.screen)
+            Label(
+                "type digits, then press ENTER", 18, Colors.DIM, WIDTH // 2, 460
+            ).draw(self.screen)
+
+        elif self.state == "guess_input":
+            Label(f"Skip: {self.round_skips}", 28, Colors.YELLOW, WIDTH // 2, 430).draw(
+                self.screen
+            )
+            Label(
+                "Press  H  for Heads   |   Press  T  for Tails",
+                26,
+                Colors.GRAY,
+                WIDTH // 2,
+                465,
+            ).draw(self.screen)
+
+        elif self.state == "result":
+            if not self.won:
+                Label("Press SPACE to continue", 26, Colors.GRAY, WIDTH // 2, 440).draw(
+                    self.screen
+                )
 
         if self.message:
             c = (
@@ -557,24 +630,15 @@ class Game:
             )
             Label(self.message, 34, c, WIDTH // 2, 505).draw(self.screen)
 
-        if self.state != "flipping" and not self.won:
-            Label(
-                "Press  H  for Heads   |   Press  T  for Tails",
-                26,
-                Colors.GRAY,
-                WIDTH // 2,
-                555,
-            ).draw(self.screen)
-
-        if self.last_result is not None:
+        if self.last_result is not None and self.state in ("result", "skip_input"):
             r = "HEADS" if self.last_result == Flip.HEADS else "TAILS"
             g = "HEADS" if self.last_guess == Flip.HEADS else "TAILS"
             Label(
-                f"Result: {r}  |  Guess: {g}", 24, Colors.WHITE, WIDTH // 2, 595
+                f"Result: {r}  |  Guess: {g}", 24, Colors.WHITE, WIDTH // 2, 555
             ).draw(self.screen)
 
         if self.won:
-            Label("YOU WIN!", 64, Colors.GREEN, WIDTH // 2, 660).draw(self.screen)
+            Label("YOU WIN!", 64, Colors.GREEN, WIDTH // 2, 620).draw(self.screen)
 
         Label(
             "ESC to return to menu", 18, Colors.DIM, 20, HEIGHT - 35, center=False
