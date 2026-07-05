@@ -90,3 +90,25 @@ class LCG(PRNG):
     @property
     def next_value(self) -> int:
         return self.set_seed((self.a * self.seed + self.c) % self.m)
+
+
+# Xorshift (Shift Register Generator)
+class SRG(PRNG):
+    MASK = 0xFFFFFFFF
+
+    def __init__(self, seed: int, a: int = 13, b: int = 7, c: int = 17) -> None:
+        super().__init__(seed)
+        self.a = a
+        self.b = b
+        self.c = c
+
+        self.interpreter = partial(Flip.BIT_INTERPRETER, bit=0)
+
+    @property
+    def next_value(self) -> int:
+        newSeed = self.seed
+        newSeed ^= (newSeed << self.a) & SRG.MASK
+        newSeed ^= (newSeed >> self.b) & SRG.MASK
+        newSeed ^= (newSeed << self.c) & SRG.MASK
+
+        return self.set_seed(newSeed)
