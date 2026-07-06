@@ -8,6 +8,7 @@ import pygame
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from prng import Flip, MiddleSquare, LCG, SRG, PRNG
+from guesser import *
 
 WIDTH = 900
 HEIGHT = 800
@@ -537,6 +538,9 @@ class Game:
 
         self.coin = Coin(*COIN_CENTER, COIN_RADIUS)
 
+        avg = avg_flip_until(self.prng, 5)
+        print(f"Avg # flips for 5 correct guesses in a row: {avg}")
+
     def reset(self):
         self.streak = 0
         self.total_flips = 0
@@ -579,7 +583,7 @@ class Game:
         if self.state == "skip_input":
             if event.key == pygame.K_RETURN:
                 raw = self.skip_buffer.strip()
-                self.round_skips = max(1, int(raw) if raw else 1)
+                self.round_skips = max(1, min(int(raw), 100) if raw else 1)
                 self.skip_buffer = ""
                 self.state = "guess_input"
             elif event.key == pygame.K_BACKSPACE:
@@ -642,7 +646,7 @@ class Game:
 
         if self.state == "skip_input":
             cursor = "▌" if (pygame.time.get_ticks() // 500) % 2 else " "
-            hint = f"Iterations to skip (min 1):  {self.skip_buffer}{cursor}"
+            hint = f"Iterations to skip (1 - 100):  {self.skip_buffer}{cursor}"
             Label(hint, 28, Colors.YELLOW, WIDTH // 2, 430).draw(self.screen)
             Label(
                 "type digits, then press ENTER", 18, Colors.DIM, WIDTH // 2, 460
