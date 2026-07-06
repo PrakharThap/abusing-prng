@@ -11,7 +11,7 @@ from prng import Flip, MiddleSquare, LCG, SRG, PRNG
 from guesser import *
 
 WIDTH = 900
-HEIGHT = 800
+HEIGHT = 960
 FPS = 60
 TARGET_STREAK = 5
 COIN_RADIUS = 85
@@ -41,13 +41,27 @@ class Colors:
 def make_prng(name: str, seed: int, params: Optional[dict] = None) -> PRNG:
     if name == "LCG":
         if params:
-            return LCG(params["m"], params["a"], params["c"], seed)
-        return LCG(2**31, 1103515245, 12345, seed)
-    if name == "Xorshift":
+            prng = LCG(params["m"], params["a"], params["c"], seed)
+        else:
+            prng = LCG(2**31, 1103515245, 12345, seed)
+    elif name == "Xorshift":
         if params:
-            return SRG(seed, params["a"], params["b"], params["c"])
-        return SRG(seed)
-    return MiddleSquare(seed)
+            prng = SRG(seed, params["a"], params["b"], params["c"])
+        else:
+            prng = SRG(seed)
+    else:
+        prng = MiddleSquare(seed)
+
+    if params and "interpreter" in params:
+        interp = params["interpreter"]
+        if interp["type"] == "bit":
+            prng.interpreter = partial(Flip.BIT_INTERPRETER, bit=interp["value"])
+        else:
+            prng.interpreter = partial(
+                Flip.THRESHOLD_INTERPRETER, threshold=interp["value"]
+            )
+
+    return prng
 
 
 def _parse_int(text: str) -> Optional[int]:
@@ -274,7 +288,7 @@ class MainMenu:
         self.screen = screen
         cx = WIDTH // 2
         btn_w, btn_h = 260, 55
-        y0 = 340
+        y0 = 420
         gap = 75
         self.buttons = [
             Button(pygame.Rect(cx - btn_w // 2, y0, btn_w, btn_h), "Play"),
@@ -307,12 +321,12 @@ class MainMenu:
 
     def draw(self):
         self.screen.fill(Colors.BG)
-        Label("PRNG Abuse", 72, Colors.WHITE, WIDTH // 2, 200).draw(self.screen)
-        Label("Coin Flip Game", 28, Colors.GRAY, WIDTH // 2, 255).draw(self.screen)
+        Label("PRNG Abuse", 72, Colors.WHITE, WIDTH // 2, 220).draw(self.screen)
+        Label("Coin Flip Game", 28, Colors.GRAY, WIDTH // 2, 275).draw(self.screen)
         for btn in self.buttons:
             btn.draw(self.screen)
         if self.ai_toast > 0:
-            Label("Coming soon!", 26, Colors.YELLOW, WIDTH // 2, 610).draw(self.screen)
+            Label("Coming soon!", 26, Colors.YELLOW, WIDTH // 2, 700).draw(self.screen)
 
 
 LCG_PRESETS = [
@@ -328,9 +342,6 @@ class ConfigScreen:
         self.screen = screen
         cx = WIDTH // 2
         field_w, field_h = 240, 36
-        preset_count = len(LCG_PRESETS)
-        pw, pg = 130, 10
-        total_pw = preset_count * pw + (preset_count - 1) * pg
 
         self.type_toggle = Toggle(
             pygame.Rect(cx - 225, 240, 450, 44), ["Middle Square", "LCG", "Xorshift"]
@@ -339,54 +350,68 @@ class ConfigScreen:
         self.seed_field = InputField(
             pygame.Rect(cx - field_w // 2, 310, field_w, field_h), "Seed", "675248"
         )
-        self.m_field = InputField(
+
+        self.interp_toggle = Toggle(
+            pygame.Rect(cx - 100, 392, 200, 36), ["Bit", "Threshold"]
+        )
+        self.interp_field = InputField(
             pygame.Rect(cx - field_w // 2, 470, field_w, field_h),
+            "Bit position",
+            "30",
+        )
+
+        self.m_field = InputField(
+            pygame.Rect(cx - field_w // 2, 555, field_w, field_h),
             "Modulus (m)",
             "2147483648",
         )
         self.lcg_a_field = InputField(
-            pygame.Rect(cx - field_w // 2, 550, field_w, field_h),
+            pygame.Rect(cx - field_w // 2, 635, field_w, field_h),
             "Multiplier (a)",
             "1103515245",
         )
         self.lcg_c_field = InputField(
-            pygame.Rect(cx - field_w // 2, 630, field_w, field_h),
+            pygame.Rect(cx - field_w // 2, 715, field_w, field_h),
             "Increment (c)",
             "12345",
         )
         self.srg_a_field = InputField(
-            pygame.Rect(cx - field_w // 2, 470, field_w, field_h),
+            pygame.Rect(cx - field_w // 2, 555, field_w, field_h),
             "Shift a",
             "13",
         )
         self.srg_b_field = InputField(
-            pygame.Rect(cx - field_w // 2, 550, field_w, field_h),
+            pygame.Rect(cx - field_w // 2, 635, field_w, field_h),
             "Shift b",
             "7",
         )
         self.srg_c_field = InputField(
-            pygame.Rect(cx - field_w // 2, 630, field_w, field_h),
+            pygame.Rect(cx - field_w // 2, 715, field_w, field_h),
             "Shift c",
             "17",
         )
+
         self.error = ""
         self.preset_idx = 1
 
+        preset_count = len(LCG_PRESETS)
+        pw, pg = 120, 10
+        total_pw = preset_count * pw + (preset_count - 1) * pg
         self.preset_rects = []
         x0 = cx - total_pw // 2
         for i in range(preset_count):
-            self.preset_rects.append(pygame.Rect(x0 + i * (pw + pg), 390, pw, 36))
+            self.preset_rects.append(pygame.Rect(x0 + i * (pw + pg), 810, pw, 34))
 
         btn_w, btn_h = 180, 50
         self.start_btn = Button(
-            pygame.Rect(cx - btn_w - 15, 720, btn_w, btn_h),
+            pygame.Rect(cx - btn_w - 15, 885, btn_w, btn_h),
             "Start",
             Colors.GREEN,
             (80, 240, 100),
             Colors.BLACK,
         )
         self.back_btn = Button(
-            pygame.Rect(cx + 15, 720, btn_w, btn_h),
+            pygame.Rect(cx + 15, 885, btn_w, btn_h),
             "Back",
             Colors.SURFACE,
             Colors.SURFACE_HOVER,
@@ -395,12 +420,27 @@ class ConfigScreen:
 
     def _active_fields(self):
         t = self.type_toggle.value()
-        fields = [self.seed_field]
+        fields = [self.seed_field, self.interp_field]
         if t == "LCG":
             fields += [self.m_field, self.lcg_a_field, self.lcg_c_field]
         elif t == "Xorshift":
             fields += [self.srg_a_field, self.srg_b_field, self.srg_c_field]
         return fields
+
+    def _sync_interp_defaults(self):
+        t = self.type_toggle.value()
+        if self.interp_toggle.value() == "Bit":
+            self.interp_field.label = "Bit position"
+            if t == "Xorshift":
+                self.interp_field.text = "0"
+            else:
+                self.interp_field.text = "30"
+        else:
+            self.interp_field.label = "Threshold"
+            if t == "Middle Square":
+                self.interp_field.text = "500000"
+            else:
+                self.interp_field.text = "1073741824"
 
     def handle_events(self, events):
         for e in events:
@@ -415,7 +455,8 @@ class ConfigScreen:
                         break
             for f in self._active_fields():
                 f.handle_event(e)
-            self.type_toggle.handle_event(e)
+            if self.type_toggle.handle_event(e) or self.interp_toggle.handle_event(e):
+                self._sync_interp_defaults()
             if self.start_btn.handle_event(e):
                 return self._try_start()
             if self.back_btn.handle_event(e):
@@ -438,16 +479,24 @@ class ConfigScreen:
         if seed is None or seed <= 0:
             self.error = "Seed must be a positive integer"
             return ("continue", None)
+
         prng_type = self.type_toggle.value()
+        interp_type = self.interp_toggle.value()
+        interp_val = self.interp_field.value()
+        if interp_val is None or interp_val < 0:
+            self.error = f"{'Bit position' if interp_type == 'Bit' else 'Threshold'} must be a non-negative integer"
+            return ("continue", None)
+        interpreter = {"type": interp_type.lower(), "value": interp_val}
+
         params = None
         if prng_type == "LCG":
             m = self.m_field.value()
             a = self.lcg_a_field.value()
             c = self.lcg_c_field.value()
-            if m is None or a is None or c is None or m <= 0 or a <= 0 or c < 0:
+            if m is None or a is None or c is None or m <= 0 or a <= 0 or c <= 0:
                 self.error = "All LCG parameters must be positive integers"
                 return ("continue", None)
-            params = {"m": m, "a": a, "c": c}
+            params = {"m": m, "a": a, "c": c, "interpreter": interpreter}
         elif prng_type == "Xorshift":
             a = self.srg_a_field.value()
             b = self.srg_b_field.value()
@@ -455,7 +504,10 @@ class ConfigScreen:
             if a is None or b is None or c is None or a <= 0 or b <= 0 or c <= 0:
                 self.error = "All shift values must be positive integers"
                 return ("continue", None)
-            params = {"a": a, "b": b, "c": c}
+            params = {"a": a, "b": b, "c": c, "interpreter": interpreter}
+        else:
+            params = {"interpreter": interpreter}
+
         self.error = ""
         return ("start_game", {"type": prng_type, "seed": seed, "params": params})
 
@@ -473,11 +525,19 @@ class ConfigScreen:
         Label("Configure PRNG", 48, Colors.WHITE, WIDTH // 2, 65).draw(self.screen)
         Label("PRNG Type", 24, Colors.GRAY, WIDTH // 2, 210).draw(self.screen)
         self.type_toggle.draw(self.screen)
+
         self.seed_field.draw(self.screen)
+
+        Label("Interpretation", 20, Colors.GRAY, WIDTH // 2, 372).draw(self.screen)
+        self.interp_toggle.draw(self.screen)
+        self.interp_field.draw(self.screen)
 
         t = self.type_toggle.value()
         if t == "LCG":
-            Label("Presets", 20, Colors.GRAY, WIDTH // 2, 370).draw(self.screen)
+            self.m_field.draw(self.screen)
+            self.lcg_a_field.draw(self.screen)
+            self.lcg_c_field.draw(self.screen)
+            Label("Presets", 20, Colors.GRAY, WIDTH // 2, 790).draw(self.screen)
             for i, (p, r) in enumerate(zip(LCG_PRESETS, self.preset_rects)):
                 if i == self.preset_idx:
                     pygame.draw.rect(
@@ -487,31 +547,24 @@ class ConfigScreen:
                 else:
                     pygame.draw.rect(self.screen, Colors.SURFACE, r, border_radius=6)
                     pygame.draw.rect(self.screen, Colors.DIM, r, 2, border_radius=6)
-                f = pygame.font.Font(None, 22)
+                f = pygame.font.Font(None, 20)
                 c = Colors.WHITE if i == self.preset_idx else Colors.GRAY
                 img = f.render(p["name"], True, c)
                 self.screen.blit(img, img.get_rect(center=r.center))
-            self.m_field.draw(self.screen)
-            self.lcg_a_field.draw(self.screen)
-            self.lcg_c_field.draw(self.screen)
         elif t == "Xorshift":
-            Label("Default: a=13, b=7, c=17", 18, Colors.DIM, WIDTH // 2, 370).draw(
-                self.screen
-            )
             self.srg_a_field.draw(self.screen)
             self.srg_b_field.draw(self.screen)
             self.srg_c_field.draw(self.screen)
         else:
-            y = 480
-            Label("No extra parameters needed", 20, Colors.DIM, WIDTH // 2, y).draw(
+            Label("No extra parameters needed", 20, Colors.DIM, WIDTH // 2, 620).draw(
                 self.screen
             )
-            Label("for Middle Square PRNG", 20, Colors.DIM, WIDTH // 2, y + 25).draw(
+            Label("for Middle Square PRNG", 20, Colors.DIM, WIDTH // 2, 645).draw(
                 self.screen
             )
 
         if self.error:
-            Label(self.error, 22, Colors.RED, WIDTH // 2, 686).draw(self.screen)
+            Label(self.error, 22, Colors.RED, WIDTH // 2, 860).draw(self.screen)
 
         self.start_btn.draw(self.screen)
         self.back_btn.draw(self.screen)
@@ -630,8 +683,11 @@ class Game:
         if self.params:
             if "m" in self.params:
                 info += f"  |  m={self.params['m']} a={self.params['a']} c={self.params['c']}"
-            else:
+            elif "a" in self.params and "b" in self.params:
                 info += f"  |  a={self.params['a']} b={self.params['b']} c={self.params['c']}"
+            if "interpreter" in self.params:
+                i = self.params["interpreter"]
+                info += f"  |  {i['type']}={i['value']}"
         Label(info, 22, Colors.GRAY, WIDTH // 2, 78).draw(self.screen)
 
         c = Colors.GREEN if self.streak > 0 else Colors.WHITE
