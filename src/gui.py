@@ -2,6 +2,7 @@ import math
 import sys
 import os
 from typing import Optional
+import copy
 
 import pygame
 
@@ -493,7 +494,7 @@ class ConfigScreen:
             m = self.m_field.value()
             a = self.lcg_a_field.value()
             c = self.lcg_c_field.value()
-            if m is None or a is None or c is None or m <= 0 or a <= 0 or c <= 0:
+            if m is None or a is None or c is None or m <= 0 or a < 0 or c < 0:
                 self.error = "All LCG parameters must be positive integers"
                 return ("continue", None)
             params = {"m": m, "a": a, "c": c, "interpreter": interpreter}
@@ -501,8 +502,8 @@ class ConfigScreen:
             a = self.srg_a_field.value()
             b = self.srg_b_field.value()
             c = self.srg_c_field.value()
-            if a is None or b is None or c is None or a <= 0 or b <= 0 or c <= 0:
-                self.error = "All shift values must be positive integers"
+            if a is None or b is None or c is None or a < 0 or b < 0 or c < 0:
+                self.error = "All shift values must be non-negative integers"
                 return ("continue", None)
             params = {"a": a, "b": b, "c": c, "interpreter": interpreter}
         else:
@@ -591,7 +592,7 @@ class Game:
 
         self.coin = Coin(*COIN_CENTER, COIN_RADIUS)
 
-        avg = avg_flip_until(self.prng, 5)
+        avg = avg_flip_until(copy.deepcopy(self.prng), 5)
         print(f"Avg # flips for 5 correct guesses in a row: {avg}")
 
     def reset(self):
