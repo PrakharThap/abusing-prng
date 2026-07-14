@@ -1,6 +1,7 @@
 from abc import abstractmethod
 from functools import partial
 from enum import Enum
+from typing import Optional
 
 
 class Flip(Enum):
@@ -112,3 +113,29 @@ class SRG(PRNG):
         newSeed ^= (newSeed << self.c) & SRG.MASK
 
         return self.set_seed(newSeed)
+
+
+def make_prng(name: str, seed: int, params: Optional[dict] = None) -> PRNG:
+    if name == "LCG":
+        if params:
+            prng = LCG(params["m"], params["a"], params["c"], seed)
+        else:
+            prng = LCG(2**31, 1103515245, 12345, seed)
+    elif name == "Xorshift":
+        if params:
+            prng = SRG(seed, params["a"], params["b"], params["c"])
+        else:
+            prng = SRG(seed)
+    else:
+        prng = MiddleSquare(seed)
+
+    if params and "interpreter" in params:
+        interp = params["interpreter"]
+        if interp["type"] == "bit":
+            prng.interpreter = partial(Flip.BIT_INTERPRETER, bit=interp["value"])
+        else:
+            prng.interpreter = partial(
+                Flip.THRESHOLD_INTERPRETER, threshold=interp["value"]
+            )
+
+    return prng

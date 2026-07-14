@@ -8,8 +8,15 @@ import pygame
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from prng import Flip, MiddleSquare, LCG, SRG, PRNG
+from prng import Flip, MiddleSquare, LCG, SRG, PRNG, make_prng
 from guesser import *
+
+try:
+    import numpy as np
+    from sb3_contrib import RecurrentPPO
+    _HAS_AI = True
+except ImportError:
+    _HAS_AI = False
 
 WIDTH = 900
 HEIGHT = 960
@@ -37,32 +44,6 @@ class Colors:
     ACCENT_DARK = (60, 110, 200)
     YELLOW = (255, 230, 80)
     INPUT_BG = (25, 25, 35)
-
-
-def make_prng(name: str, seed: int, params: Optional[dict] = None) -> PRNG:
-    if name == "LCG":
-        if params:
-            prng = LCG(params["m"], params["a"], params["c"], seed)
-        else:
-            prng = LCG(2**31, 1103515245, 12345, seed)
-    elif name == "Xorshift":
-        if params:
-            prng = SRG(seed, params["a"], params["b"], params["c"])
-        else:
-            prng = SRG(seed)
-    else:
-        prng = MiddleSquare(seed)
-
-    if params and "interpreter" in params:
-        interp = params["interpreter"]
-        if interp["type"] == "bit":
-            prng.interpreter = partial(Flip.BIT_INTERPRETER, bit=interp["value"])
-        else:
-            prng.interpreter = partial(
-                Flip.THRESHOLD_INTERPRETER, threshold=interp["value"]
-            )
-
-    return prng
 
 
 def _parse_int(text: str) -> Optional[int]:
@@ -296,7 +277,6 @@ class MainMenu:
             Button(
                 pygame.Rect(cx - btn_w // 2, y0 + gap, btn_w, btn_h),
                 "AI Play",
-                text_color=Colors.GRAY,
             ),
             Button(pygame.Rect(cx - btn_w // 2, y0 + gap * 2, btn_w, btn_h), "Quit"),
         ]
@@ -311,7 +291,10 @@ class MainMenu:
                     if i == 0:
                         return ("config", None)
                     if i == 1:
-                        self.ai_toast = 90
+                        if not _HAS_AI:
+                            self.ai_toast = 120
+                        else:
+                            return ("config", {"ai_mode": True})
                     if i == 2:
                         return ("quit", None)
         return ("continue", None)
@@ -327,7 +310,7 @@ class MainMenu:
         for btn in self.buttons:
             btn.draw(self.screen)
         if self.ai_toast > 0:
-            Label("Coming soon!", 26, Colors.YELLOW, WIDTH // 2, 700).draw(self.screen)
+            Label("AI dependencies not installed. Run: pip install torch gymnasium stable-baselines3 sb3-contrib", 20, Colors.YELLOW, WIDTH // 2, 700).draw(self.screen)
 
 
 LCG_PRESETS = [
@@ -339,7 +322,8 @@ LCG_PRESETS = [
 
 
 class ConfigScreen:
-    def __init__(self, screen):
+    def __init__(self, screen, ai_mode=False):
+        self.ai_mode = ai_mode
         self.screen = screen
         cx = WIDTH // 2
         field_w, field_h = 240, 36
@@ -404,9 +388,10 @@ class ConfigScreen:
             self.preset_rects.append(pygame.Rect(x0 + i * (pw + pg), 810, pw, 34))
 
         btn_w, btn_h = 180, 50
+        start_text = "Start AI" if ai_mode else "Start"
         self.start_btn = Button(
             pygame.Rect(cx - btn_w - 15, 885, btn_w, btn_h),
-            "Start",
+            start_text,
             Colors.GREEN,
             (80, 240, 100),
             Colors.BLACK,
@@ -750,6 +735,251 @@ class Game:
         ).draw(self.screen)
 
 
+def _guess_model_path(cfg):
+    prng_type = cfg["type"]
+    params = cfg.get("params") or {}
+    if prng_type == "LCG":
+        m = params.get("m")
+        a = params.get("a")
+        c = params.get("c")
+        for p in LCG_PRESETS:
+            if m == p["m"] and a == p["a"] and c == p["c"]:
+                return f"models/LCG_{p['name'].lower()}.zip", f"LCG_{p['name'].lower()}"
+        return "models/LCG_glibc.zip", "LCG_glibc"
+    name = prng_type.replace(" ", "_")
+    return f"models/{name}.zip", name
+
+
+class AIGame:
+    def __init__(self, screen, clock, prng_type, seed, params, model, model_name):
+        self.screen = screen
+        self.clock = clock
+        self.prng = make_prng(prng_type, seed, params)
+        self.prng_name = prng_type
+        self.seed = seed
+        self.params = params
+        self.model = model
+        self.model_name = model_name
+
+        self.streak = 0
+        self.total_attempts = 0
+        self.correct_count = 0
+        self.last_result = None
+        self.last_guess = None
+        self.message = ""
+        self.won = False
+
+        self.coin = Coin(*COIN_CENTER, COIN_RADIUS)
+
+        self.history_len = 10
+        self.max_skip = 50
+        self.max_steps = 500
+        self._reset_history()
+
+        self.phase = "get_action"
+        self.phase_start = 0
+        self.current_skip = 1
+        self.current_prediction = Flip.HEADS
+
+        self.lstm_states = None
+        self.episode_starts = True
+        self._advance_phase()
+
+    def _reset_history(self):
+        self.results_history = [-1.0] * self.history_len
+        self.guesses_history = [-1.0] * self.history_len
+        self.skips_history = [0.0] * self.history_len
+
+    def _make_obs(self):
+        last_correct = 0.0
+        if self.last_result is not None and self.last_guess is not None:
+            last_correct = float(self.last_guess == self.last_result)
+        return np.array(
+            self.results_history
+            + self.guesses_history
+            + self.skips_history
+            + [
+                self.streak / 5.0,
+                self.total_attempts / self.max_steps,
+                last_correct,
+            ],
+            dtype=np.float32,
+        )
+
+    def _advance_prng(self, n):
+        for _ in range(n):
+            self.prng.next_value
+
+    def _get_action(self):
+        obs = self._make_obs()
+        action, self.lstm_states = self.model.predict(
+            obs, state=self.lstm_states, episode_start=self.episode_starts
+        )
+        self.episode_starts = False
+        self.current_skip = int(action[0]) + 1
+        self.current_prediction = Flip.HEADS if int(action[1]) == 0 else Flip.TAILS
+
+    def _advance_phase(self):
+        if self.phase == "get_action":
+            self._get_action()
+            self.phase = "skip_display"
+            self.phase_start = pygame.time.get_ticks()
+        elif self.phase == "skip_display":
+            self.phase = "guess_display"
+            self.phase_start = pygame.time.get_ticks()
+        elif self.phase == "guess_display":
+            self.phase = "execute"
+            self.phase_start = pygame.time.get_ticks()
+        elif self.phase == "execute":
+            self.last_guess = self.current_prediction
+            self._advance_prng(self.current_skip)
+            result = self.prng.current_flip
+            self.last_result = result
+            self.coin.start_flip(result)
+            self.phase = "flipping"
+        elif self.phase == "flipping":
+            if self.last_guess == self.last_result:
+                self.streak += 1
+                self.correct_count += 1
+                self.message = "Correct!"
+                if self.streak >= TARGET_STREAK:
+                    self.won = True
+                    self.message = "AI wins!"
+            else:
+                self.streak = 0
+                self.message = "Wrong!"
+            self.total_attempts += 1
+            self.phase = "result_display"
+            self.phase_start = pygame.time.get_ticks()
+        elif self.phase == "result_display":
+            self.results_history = self.results_history[1:] + [float(self.last_result.value)]
+            self.guesses_history = self.guesses_history[1:] + [float(self.last_guess.value)]
+            self.skips_history = self.skips_history[1:] + [self.current_skip / self.max_skip]
+            if self.won:
+                self.phase = "won"
+            else:
+                self.phase = "get_action"
+                self._advance_phase()
+
+    def handle(self, event):
+        if event.type == pygame.QUIT:
+            return ("quit", None)
+        if event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_ESCAPE and self.phase != "flipping":
+                return ("menu", None)
+            if self.won and event.key == pygame.K_r:
+                self.reset()
+        return ("continue", None)
+
+    def reset(self):
+        self.streak = 0
+        self.total_attempts = 0
+        self.correct_count = 0
+        self.last_result = None
+        self.last_guess = None
+        self.message = ""
+        self.won = False
+        self.prng.reset(self.seed)
+        self._reset_history()
+        self.phase = "get_action"
+        self.lstm_states = None
+        self.episode_starts = True
+        self._advance_phase()
+
+    def update(self):
+        self.coin.update()
+        now = pygame.time.get_ticks()
+
+        if self.phase == "skip_display" and now - self.phase_start >= 300:
+            self._advance_phase()
+        elif self.phase == "guess_display" and now - self.phase_start >= 300:
+            self._advance_phase()
+        elif self.phase == "execute":
+            self._advance_phase()
+        elif self.phase == "flipping" and not self.coin.animating:
+            self._advance_phase()
+        elif self.phase == "result_display" and now - self.phase_start >= 500:
+            self._advance_phase()
+
+    def draw(self):
+        self.screen.fill(Colors.BG)
+
+        panel = pygame.Rect(20, 20, WIDTH - 40, HEIGHT - 40)
+        pygame.draw.rect(self.screen, Colors.SURFACE, panel, border_radius=12)
+        pygame.draw.rect(self.screen, Colors.DIM, panel, 2, border_radius=12)
+
+        Label("AI Play — PRNG Coin Flip", 50, Colors.WHITE, WIDTH // 2, 45).draw(
+            self.screen
+        )
+        Label(f"AI Model: {self.model_name}", 22, Colors.ACCENT, WIDTH // 2, 80).draw(
+            self.screen
+        )
+        info = f"{self.prng_name}  |  Seed: {self.seed}"
+        if self.params:
+            if "m" in self.params:
+                info += f"  |  m={self.params['m']} a={self.params['a']} c={self.params['c']}"
+            elif "a" in self.params and "b" in self.params:
+                info += f"  |  a={self.params['a']} b={self.params['b']} c={self.params['c']}"
+            if "interpreter" in self.params:
+                i = self.params["interpreter"]
+                info += f"  |  {i['type']}={i['value']}"
+        Label(info, 18, Colors.GRAY, WIDTH // 2, 103).draw(self.screen)
+
+        c = Colors.GREEN if self.streak > 0 else Colors.WHITE
+        Label(f"Streak:  {self.streak} / {TARGET_STREAK}", 38, c, WIDTH // 2, 140).draw(
+            self.screen
+        )
+        pct = (self.correct_count / max(self.total_attempts, 1)) * 100
+        Label(
+            f"Attempts: {self.total_attempts}  |  Accuracy: {pct:.0f}%",
+            22,
+            Colors.GRAY,
+            WIDTH // 2,
+            170,
+        ).draw(self.screen)
+
+        self.coin.draw(self.screen)
+
+        if self.phase == "skip_display":
+            Label("AI is thinking...", 28, Colors.YELLOW, WIDTH // 2, 430).draw(
+                self.screen
+            )
+        elif self.phase == "guess_display":
+            Label(
+                f"AI skips: {self.current_skip}", 28, Colors.YELLOW, WIDTH // 2, 430
+            ).draw(self.screen)
+        elif self.phase == "flipping":
+            pred_label = "HEADS" if self.current_prediction == Flip.HEADS else "TAILS"
+            Label(
+                f"AI predicts: {pred_label}", 28, Colors.YELLOW, WIDTH // 2, 430
+            ).draw(self.screen)
+        elif self.phase == "result_display":
+            if not self.won:
+                Label("", 26, Colors.GRAY, WIDTH // 2, 440).draw(self.screen)
+        elif self.phase == "won":
+            Label(
+                "Press R to restart AI, ESC to exit", 26, Colors.GRAY, WIDTH // 2, 440
+            ).draw(self.screen)
+
+        if self.message:
+            c = Colors.GREEN if ("Correct" in self.message or "win" in self.message) else Colors.RED
+            Label(self.message, 34, c, WIDTH // 2, 505).draw(self.screen)
+
+        if self.last_result is not None and self.phase != "skip_display":
+            r = "HEADS" if self.last_result == Flip.HEADS else "TAILS"
+            g = "HEADS" if self.last_guess == Flip.HEADS else "TAILS"
+            Label(
+                f"Result: {r}  |  Guess: {g}", 24, Colors.WHITE, WIDTH // 2, 555
+            ).draw(self.screen)
+
+        if self.won:
+            Label("AI WINS!", 64, Colors.GREEN, WIDTH // 2, 620).draw(self.screen)
+
+        Label(
+            "ESC to return to menu", 18, Colors.DIM, 20, HEIGHT - 35, center=False
+        ).draw(self.screen)
+
+
 class App:
     def __init__(self):
         pygame.init()
@@ -760,8 +990,17 @@ class App:
 
         self.menu = MainMenu(self.screen)
         self.config: Optional[ConfigScreen] = None
-        self.game: Optional[Game] = None
+        self.game: Optional = None
         self.current = "menu"
+        self.ai_mode = False
+
+    def _try_load_ai(self, cfg):
+        path, model_name = _guess_model_path(cfg)
+        full_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", path)
+        if os.path.exists(full_path):
+            model = RecurrentPPO.load(full_path)
+            return model, model_name
+        return None, model_name
 
     def run(self):
         while self.running:
@@ -772,7 +1011,9 @@ class App:
                 self.menu.update()
                 self.menu.draw()
                 if action[0] == "config":
-                    self.config = ConfigScreen(self.screen)
+                    payload = action[1] or {}
+                    self.ai_mode = payload.get("ai_mode", False)
+                    self.config = ConfigScreen(self.screen, ai_mode=self.ai_mode)
                     self.current = "config"
                 elif action[0] == "quit":
                     self.running = False
@@ -783,10 +1024,24 @@ class App:
                 self.config.draw()
                 if action[0] == "start_game":
                     cfg = action[1]
-                    self.game = Game(
-                        self.screen, self.clock, cfg["type"], cfg["seed"], cfg["params"]
-                    )
-                    self.current = "game"
+                    if self.ai_mode:
+                        model, model_name = self._try_load_ai(cfg)
+                        if model is not None:
+                            self.game = AIGame(
+                                self.screen, self.clock, cfg["type"], cfg["seed"],
+                                cfg["params"], model, model_name
+                            )
+                            self.current = "game"
+                        else:
+                            self.config.error = (
+                                f"AI model not found. Train one first:\n"
+                                f"  python src/agents/train.py --prng \"{cfg['type']}\""
+                            )
+                    else:
+                        self.game = Game(
+                            self.screen, self.clock, cfg["type"], cfg["seed"], cfg["params"]
+                        )
+                        self.current = "game"
                 elif action[0] == "menu":
                     self.current = "menu"
                 elif action[0] == "quit":
