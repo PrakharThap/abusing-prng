@@ -43,7 +43,6 @@ class PRNG:
         pass
 
     @property
-    @abstractmethod
     def current_flip(self) -> Flip:
         return self.interpreter(val=self.seed)
 

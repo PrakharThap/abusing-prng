@@ -11,9 +11,12 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from prng import Flip, MiddleSquare, LCG, SRG, PRNG, make_prng
 from guesser import *
 
+ANIMATIONS_ENABLED = True
+
 try:
     import numpy as np
     from sb3_contrib import RecurrentPPO
+
     _HAS_AI = True
 except ImportError:
     _HAS_AI = False
@@ -218,10 +221,15 @@ class Coin:
 
     def start_flip(self, result: Flip) -> None:
         self.result_face = result
-        self.face = Flip.HEADS
         self.scale_x = 1.0
-        self.animating = True
         self.frame = 0
+
+        if not ANIMATIONS_ENABLED:
+            self.face = self.result_face
+            self.animating = False
+        else:
+            self.face = Flip.HEADS
+            self.animating = True
 
     def update(self) -> None:
         if not self.animating:
@@ -310,7 +318,13 @@ class MainMenu:
         for btn in self.buttons:
             btn.draw(self.screen)
         if self.ai_toast > 0:
-            Label("AI dependencies not installed. Run: pip install torch gymnasium stable-baselines3 sb3-contrib", 20, Colors.YELLOW, WIDTH // 2, 700).draw(self.screen)
+            Label(
+                "AI dependencies not installed. Run: pip install torch gymnasium stable-baselines3 sb3-contrib",
+                20,
+                Colors.YELLOW,
+                WIDTH // 2,
+                700,
+            ).draw(self.screen)
 
 
 LCG_PRESETS = [
@@ -334,6 +348,13 @@ class ConfigScreen:
 
         self.seed_field = InputField(
             pygame.Rect(cx - field_w // 2, 310, field_w, field_h), "Seed", "675248"
+        )
+        self.random_seed_btn = Button(
+            pygame.Rect(cx + field_w // 2 + 10, 310, 60, field_h),
+            "Rand",
+            Colors.ACCENT_DARK,
+            Colors.ACCENT,
+            Colors.WHITE,
         )
 
         self.interp_toggle = Toggle(
@@ -443,6 +464,10 @@ class ConfigScreen:
                 f.handle_event(e)
             if self.type_toggle.handle_event(e) or self.interp_toggle.handle_event(e):
                 self._sync_interp_defaults()
+            if self.random_seed_btn.handle_event(e):
+                import random
+
+                self.seed_field.text = str(random.randint(0, 65535))
             if self.start_btn.handle_event(e):
                 return self._try_start()
             if self.back_btn.handle_event(e):
@@ -513,6 +538,7 @@ class ConfigScreen:
         self.type_toggle.draw(self.screen)
 
         self.seed_field.draw(self.screen)
+        self.random_seed_btn.draw(self.screen)
 
         Label("Interpretation", 20, Colors.GRAY, WIDTH // 2, 372).draw(self.screen)
         self.interp_toggle.draw(self.screen)
@@ -608,6 +634,10 @@ class Game:
     def handle(self, event):
         if event.type == pygame.QUIT:
             return ("quit", None)
+        if event.type == pygame.KEYDOWN and event.key == pygame.K_TAB:
+            global ANIMATIONS_ENABLED
+            ANIMATIONS_ENABLED = not ANIMATIONS_ENABLED
+            return ("continue", None)
         if event.type != pygame.KEYDOWN:
             return ("continue", None)
         if event.key == pygame.K_ESCAPE and self.state != "flipping":
@@ -734,20 +764,11 @@ class Game:
             "ESC to return to menu", 18, Colors.DIM, 20, HEIGHT - 35, center=False
         ).draw(self.screen)
 
-
-def _guess_model_path(cfg):
-    prng_type = cfg["type"]
-    params = cfg.get("params") or {}
-    if prng_type == "LCG":
-        m = params.get("m")
-        a = params.get("a")
-        c = params.get("c")
-        for p in LCG_PRESETS:
-            if m == p["m"] and a == p["a"] and c == p["c"]:
-                return f"models/LCG_{p['name'].lower()}.zip", f"LCG_{p['name'].lower()}"
-        return "models/LCG_glibc.zip", "LCG_glibc"
-    name = prng_type.replace(" ", "_")
-    return f"models/{name}.zip", name
+        anim_color = Colors.GREEN if ANIMATIONS_ENABLED else Colors.RED
+        anim_text = "Anim: ON" if ANIMATIONS_ENABLED else "Anim: OFF"
+        Label(
+            f"[TAB] {anim_text}", 16, anim_color, WIDTH - 20, HEIGHT - 35, center=False
+        ).draw(self.screen)
 
 
 class AIGame:
@@ -852,9 +873,15 @@ class AIGame:
             self.phase = "result_display"
             self.phase_start = pygame.time.get_ticks()
         elif self.phase == "result_display":
-            self.results_history = self.results_history[1:] + [float(self.last_result.value)]
-            self.guesses_history = self.guesses_history[1:] + [float(self.last_guess.value)]
-            self.skips_history = self.skips_history[1:] + [self.current_skip / self.max_skip]
+            self.results_history = self.results_history[1:] + [
+                float(self.last_result.value)
+            ]
+            self.guesses_history = self.guesses_history[1:] + [
+                float(self.last_guess.value)
+            ]
+            self.skips_history = self.skips_history[1:] + [
+                self.current_skip / self.max_skip
+            ]
             if self.won:
                 self.phase = "won"
             else:
@@ -864,6 +891,10 @@ class AIGame:
     def handle(self, event):
         if event.type == pygame.QUIT:
             return ("quit", None)
+        if event.type == pygame.KEYDOWN and event.key == pygame.K_TAB:
+            global ANIMATIONS_ENABLED
+            ANIMATIONS_ENABLED = not ANIMATIONS_ENABLED
+            return ("continue", None)
         if event.type == pygame.KEYDOWN:
             if event.key == pygame.K_ESCAPE and self.phase != "flipping":
                 return ("menu", None)
@@ -962,7 +993,11 @@ class AIGame:
             ).draw(self.screen)
 
         if self.message:
-            c = Colors.GREEN if ("Correct" in self.message or "win" in self.message) else Colors.RED
+            c = (
+                Colors.GREEN
+                if ("Correct" in self.message or "win" in self.message)
+                else Colors.RED
+            )
             Label(self.message, 34, c, WIDTH // 2, 505).draw(self.screen)
 
         if self.last_result is not None and self.phase != "skip_display":
@@ -979,6 +1014,101 @@ class AIGame:
             "ESC to return to menu", 18, Colors.DIM, 20, HEIGHT - 35, center=False
         ).draw(self.screen)
 
+        anim_color = Colors.GREEN if ANIMATIONS_ENABLED else Colors.RED
+        anim_text = "Anim: ON" if ANIMATIONS_ENABLED else "Anim: OFF"
+        Label(
+            f"[TAB] {anim_text}", 16, anim_color, WIDTH - 20, HEIGHT - 35, center=False
+        ).draw(self.screen)
+
+
+def _models_dir():
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "models")
+
+
+class ModelPicker:
+    def __init__(self, screen):
+        self.screen = screen
+        self.models = []
+        self.buttons = []
+        self.cancel_btn = Button(
+            pygame.Rect(WIDTH // 2 - 90, HEIGHT - 100, 180, 50),
+            "Cancel",
+            Colors.SURFACE,
+            Colors.SURFACE_HOVER,
+        )
+        self.error = ""
+        self._refresh()
+
+    def _refresh(self):
+        d = _models_dir()
+        os.makedirs(d, exist_ok=True)
+        files = sorted(f for f in os.listdir(d) if f.endswith(".zip"))
+        self.models = files
+        self.buttons = []
+        y0 = 200
+        for i, f in enumerate(files):
+            btn = Button(
+                pygame.Rect(WIDTH // 2 - 200, y0 + i * 55, 400, 44),
+                f.replace(".zip", ""),
+                Colors.INPUT_BG,
+                Colors.SURFACE_HOVER,
+            )
+            self.buttons.append(btn)
+
+    def handle_event(self, event):
+        if event.type == pygame.QUIT:
+            return ("quit", None)
+        for btn in self.buttons:
+            if btn.handle_event(event):
+                idx = self.buttons.index(btn)
+                model_path = os.path.join(_models_dir(), self.models[idx])
+                try:
+                    model = RecurrentPPO.load(model_path)
+                    name = self.models[idx].replace(".zip", "")
+                    return ("loaded", model, name)
+                except Exception as e:
+                    self.error = f"Failed to load model: {e}"
+                    return ("continue", None)
+        if self.cancel_btn.handle_event(event):
+            return ("cancel", None)
+        if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+            return ("cancel", None)
+        return ("continue", None)
+
+    def draw(self):
+        self.screen.fill(Colors.BG)
+
+        panel = pygame.Rect(20, 20, WIDTH - 40, HEIGHT - 40)
+        pygame.draw.rect(self.screen, Colors.SURFACE, panel, border_radius=12)
+        pygame.draw.rect(self.screen, Colors.DIM, panel, 2, border_radius=12)
+
+        Label("Select AI Model", 48, Colors.WHITE, WIDTH // 2, 65).draw(self.screen)
+        Label(
+            "Choose a trained model file to use for AI Play",
+            22,
+            Colors.GRAY,
+            WIDTH // 2,
+            100,
+        ).draw(self.screen)
+
+        if not self.models:
+            Label(
+                "No model files found in models/ directory.\nTrain one first:\n"
+                "  python src/agents/train.py --prng LCG --preset glibc",
+                22,
+                Colors.RED,
+                WIDTH // 2,
+                250,
+            ).draw(self.screen)
+
+        for btn in self.buttons:
+            btn.draw(self.screen)
+
+        if self.error:
+            Label(self.error, 20, Colors.RED, WIDTH // 2, 170).draw(self.screen)
+
+        self.cancel_btn.draw(self.screen)
+
 
 class App:
     def __init__(self):
@@ -991,16 +1121,10 @@ class App:
         self.menu = MainMenu(self.screen)
         self.config: Optional[ConfigScreen] = None
         self.game: Optional = None
+        self.model_picker: Optional[ModelPicker] = None
         self.current = "menu"
         self.ai_mode = False
-
-    def _try_load_ai(self, cfg):
-        path, model_name = _guess_model_path(cfg)
-        full_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", path)
-        if os.path.exists(full_path):
-            model = RecurrentPPO.load(full_path)
-            return model, model_name
-        return None, model_name
+        self.ai_cfg = None
 
     def run(self):
         while self.running:
@@ -1025,27 +1149,46 @@ class App:
                 if action[0] == "start_game":
                     cfg = action[1]
                     if self.ai_mode:
-                        model, model_name = self._try_load_ai(cfg)
-                        if model is not None:
-                            self.game = AIGame(
-                                self.screen, self.clock, cfg["type"], cfg["seed"],
-                                cfg["params"], model, model_name
-                            )
-                            self.current = "game"
-                        else:
-                            self.config.error = (
-                                f"AI model not found. Train one first:\n"
-                                f"  python src/agents/train.py --prng \"{cfg['type']}\""
-                            )
+                        self.ai_cfg = cfg
+                        self.model_picker = ModelPicker(self.screen)
+                        self.current = "model_picker"
                     else:
                         self.game = Game(
-                            self.screen, self.clock, cfg["type"], cfg["seed"], cfg["params"]
+                            self.screen,
+                            self.clock,
+                            cfg["type"],
+                            cfg["seed"],
+                            cfg["params"],
                         )
                         self.current = "game"
                 elif action[0] == "menu":
                     self.current = "menu"
                 elif action[0] == "quit":
                     self.running = False
+
+            elif self.current == "model_picker":
+                for e in events:
+                    action = self.model_picker.handle_event(e)
+                    if action[0] == "loaded":
+                        _, model, model_name = action
+                        self.game = AIGame(
+                            self.screen,
+                            self.clock,
+                            self.ai_cfg["type"],
+                            self.ai_cfg["seed"],
+                            self.ai_cfg["params"],
+                            model,
+                            model_name,
+                        )
+                        self.current = "game"
+                        break
+                    elif action[0] == "cancel":
+                        self.current = "config"
+                        break
+                    elif action[0] == "quit":
+                        self.running = False
+                        break
+                self.model_picker.draw()
 
             elif self.current == "game":
                 for e in events:

@@ -20,8 +20,18 @@ def _params_for(prng_type, preset):
     if prng_type == "LCG":
         if preset:
             p = LCG_PRESETS[preset]
-            return {"m": p["m"], "a": p["a"], "c": p["c"], "interpreter": {"type": "bit", "value": 30}}
-        return {"m": 2**31, "a": 1103515245, "c": 12345, "interpreter": {"type": "bit", "value": 30}}
+            return {
+                "m": p["m"],
+                "a": p["a"],
+                "c": p["c"],
+                "interpreter": {"type": "bit", "value": 30},
+            }
+        return {
+            "m": 2**31,
+            "a": 1103515245,
+            "c": 12345,
+            "interpreter": {"type": "bit", "value": 30},
+        }
     if prng_type == "Xorshift":
         return {"a": 13, "b": 7, "c": 17, "interpreter": {"type": "bit", "value": 0}}
     return {"interpreter": {"type": "threshold", "value": 500000}}
@@ -36,12 +46,15 @@ def _model_name_for(prng_type, preset):
 def make_env(prng_type, params, max_skip=50):
     def _init():
         return PRNGEnv(prng_type=prng_type, seed=0, params=params, max_skip=max_skip)
+
     return _init
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--prng", choices=["Middle Square", "LCG", "Xorshift"], default="LCG")
+    parser.add_argument(
+        "--prng", choices=["Middle Square", "LCG", "Xorshift"], default="LCG"
+    )
     parser.add_argument("--preset", choices=list(LCG_PRESETS.keys()), default=None)
     parser.add_argument("--timesteps", type=int, default=200_000)
     parser.add_argument("--max-skip", type=int, default=50)
@@ -79,6 +92,7 @@ def main():
         clip_range=0.2,
         ent_coef=0.01,
         policy_kwargs={"lstm_hidden_size": 128, "n_lstm_layers": 1},
+        device="cpu",
     )
 
     model.learn(total_timesteps=args.timesteps)
