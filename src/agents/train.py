@@ -57,8 +57,8 @@ def main():
     )
     parser.add_argument("--preset", choices=list(LCG_PRESETS.keys()), default=None)
     parser.add_argument("--timesteps", type=int, default=200_000)
-    parser.add_argument("--max-skip", type=int, default=50)
-    parser.add_argument("--output-dir", default="models")
+    parser.add_argument("--max-skip", type=int, default=10)
+    parser.add_argument("--output-dir", default="../models")
     args = parser.parse_args()
 
     os.makedirs(args.output_dir, exist_ok=True)

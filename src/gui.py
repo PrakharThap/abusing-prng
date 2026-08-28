@@ -910,7 +910,8 @@ class AIGame:
         self.last_guess = None
         self.message = ""
         self.won = False
-        self.prng.reset(self.seed)
+        # self.prng.reset(self.seed)
+        self.seed = random.randint(0, 65355)
         self._reset_history()
         self.phase = "get_action"
         self.lstm_states = None
