@@ -1,6 +1,7 @@
 import math
 import sys
 import os
+import json
 from typing import Optional
 import copy
 
@@ -71,7 +72,11 @@ class Label:
         font = pygame.font.Font(None, self.size)
         img = font.render(self.text, True, self.color)
         rect = img.get_rect()
-        if self.center:
+        if self.center == "right":
+            rect.topright = (self.x, self.y)
+        elif self.center == "left":
+            rect.topleft = (self.x, self.y)
+        elif self.center:
             rect.center = (self.x, self.y)
         else:
             rect.topleft = (self.x, self.y)
@@ -426,6 +431,8 @@ class ConfigScreen:
         )
 
     def _active_fields(self):
+        if self.ai_mode:
+            return [self.seed_field]
         t = self.type_toggle.value()
         fields = [self.seed_field, self.interp_field]
         if t == "LCG":
@@ -462,7 +469,9 @@ class ConfigScreen:
                         break
             for f in self._active_fields():
                 f.handle_event(e)
-            if self.type_toggle.handle_event(e) or self.interp_toggle.handle_event(e):
+            if not self.ai_mode and (
+                self.type_toggle.handle_event(e) or self.interp_toggle.handle_event(e)
+            ):
                 self._sync_interp_defaults()
             if self.random_seed_btn.handle_event(e):
                 import random
@@ -474,7 +483,7 @@ class ConfigScreen:
                 return ("menu", None)
             if e.type == pygame.KEYDOWN and e.key == pygame.K_RETURN:
                 return self._try_start()
-            if e.type == pygame.MOUSEBUTTONDOWN and e.button == 1:
+            if e.type == pygame.MOUSEBUTTONDOWN and e.button == 1 and not self.ai_mode:
                 if self.type_toggle.value() == "LCG":
                     for i, r in enumerate(self.preset_rects):
                         if r.collidepoint(e.pos):
@@ -490,6 +499,10 @@ class ConfigScreen:
         if seed is None or seed <= 0:
             self.error = "Seed must be a positive integer"
             return ("continue", None)
+
+        if self.ai_mode:
+            self.error = ""
+            return ("start_game", {"seed": seed})
 
         prng_type = self.type_toggle.value()
         interp_type = self.interp_toggle.value()
@@ -532,6 +545,29 @@ class ConfigScreen:
         panel = pygame.Rect(20, 20, WIDTH - 40, HEIGHT - 40)
         pygame.draw.rect(self.screen, Colors.SURFACE, panel, border_radius=12)
         pygame.draw.rect(self.screen, Colors.DIM, panel, 2, border_radius=12)
+
+        if self.ai_mode:
+            Label("Configure AI Play", 48, Colors.WHITE, WIDTH // 2, 65).draw(
+                self.screen
+            )
+            Label("Seed", 24, Colors.GRAY, WIDTH // 2, 280).draw(self.screen)
+            self.seed_field.draw(self.screen)
+            self.random_seed_btn.draw(self.screen)
+            Label(
+                "PRNG type and interpreter are auto-configured",
+                20,
+                Colors.GRAY,
+                WIDTH // 2,
+                400,
+            ).draw(self.screen)
+            Label("from the model you select next.", 20, Colors.GRAY, WIDTH // 2, 425).draw(
+                self.screen
+            )
+            if self.error:
+                Label(self.error, 22, Colors.RED, WIDTH // 2, 860).draw(self.screen)
+            self.start_btn.draw(self.screen)
+            self.back_btn.draw(self.screen)
+            return
 
         Label("Configure PRNG", 48, Colors.WHITE, WIDTH // 2, 65).draw(self.screen)
         Label("PRNG Type", 24, Colors.GRAY, WIDTH // 2, 210).draw(self.screen)
@@ -767,7 +803,7 @@ class Game:
         anim_color = Colors.GREEN if ANIMATIONS_ENABLED else Colors.RED
         anim_text = "Anim: ON" if ANIMATIONS_ENABLED else "Anim: OFF"
         Label(
-            f"[TAB] {anim_text}", 16, anim_color, WIDTH - 20, HEIGHT - 35, center=False
+            f"[TAB] {anim_text}", 16, anim_color, WIDTH - 20, HEIGHT - 35, center="right"
         ).draw(self.screen)
 
 
@@ -793,7 +829,10 @@ class AIGame:
         self.coin = Coin(*COIN_CENTER, COIN_RADIUS)
 
         self.history_len = 10
-        self.max_skip = 50
+        try:
+            self.max_skip = int(self.model.action_space.nvec[0])
+        except Exception:
+            self.max_skip = 50
         self.max_steps = 500
         self._reset_history()
 
@@ -955,6 +994,7 @@ class AIGame:
             if "interpreter" in self.params:
                 i = self.params["interpreter"]
                 info += f"  |  {i['type']}={i['value']}"
+        info += f"  |  Max Skip: {self.max_skip}"
         Label(info, 18, Colors.GRAY, WIDTH // 2, 103).draw(self.screen)
 
         c = Colors.GREEN if self.streak > 0 else Colors.WHITE
@@ -1018,7 +1058,7 @@ class AIGame:
         anim_color = Colors.GREEN if ANIMATIONS_ENABLED else Colors.RED
         anim_text = "Anim: ON" if ANIMATIONS_ENABLED else "Anim: OFF"
         Label(
-            f"[TAB] {anim_text}", 16, anim_color, WIDTH - 20, HEIGHT - 35, center=False
+            f"[TAB] {anim_text}", 16, anim_color, WIDTH - 20, HEIGHT - 35, center="right"
         ).draw(self.screen)
 
 
@@ -1030,6 +1070,7 @@ class ModelPicker:
     def __init__(self, screen):
         self.screen = screen
         self.models = []
+        self.meta = []
         self.buttons = []
         self.cancel_btn = Button(
             pygame.Rect(WIDTH // 2 - 90, HEIGHT - 100, 180, 50),
@@ -1037,20 +1078,43 @@ class ModelPicker:
             Colors.SURFACE,
             Colors.SURFACE_HOVER,
         )
+        self.back_btn = Button(
+            pygame.Rect(WIDTH // 2 - WIDTH // 2 + 30, HEIGHT - 100, 120, 50),
+            "Back",
+            Colors.SURFACE,
+            Colors.SURFACE_HOVER,
+        )
         self.error = ""
         self._refresh()
+
+    def _interp_label(self, meta):
+        interp = (meta or {}).get("params", {}).get("interpreter", {})
+        t = interp.get("type", "?")
+        v = interp.get("value", "?")
+        return f"{t}={v}"
 
     def _refresh(self):
         d = _models_dir()
         os.makedirs(d, exist_ok=True)
         files = sorted(f for f in os.listdir(d) if f.endswith(".zip"))
         self.models = files
+        self.meta = []
+        for f in files:
+            meta_path = os.path.join(d, f.replace(".zip", ".json"))
+            m = None
+            if os.path.exists(meta_path):
+                try:
+                    with open(meta_path) as fp:
+                        m = json.load(fp)
+                except Exception:
+                    m = None
+            self.meta.append(m)
         self.buttons = []
-        y0 = 200
+        y0 = 180
         for i, f in enumerate(files):
             btn = Button(
-                pygame.Rect(WIDTH // 2 - 200, y0 + i * 55, 400, 44),
-                f.replace(".zip", ""),
+                pygame.Rect(WIDTH // 2 - 300, y0 + i * 70, 600, 58),
+                "",
                 Colors.INPUT_BG,
                 Colors.SURFACE_HOVER,
             )
@@ -1062,15 +1126,22 @@ class ModelPicker:
         for btn in self.buttons:
             if btn.handle_event(event):
                 idx = self.buttons.index(btn)
+                meta = self.meta[idx]
+                if not meta:
+                    self.error = (
+                        f"{self.models[idx].replace('.zip', '')} has no metadata. "
+                        "Re-train it with the current train.py to enable AI Play."
+                    )
+                    return ("continue", None)
                 model_path = os.path.join(_models_dir(), self.models[idx])
                 try:
                     model = RecurrentPPO.load(model_path)
                     name = self.models[idx].replace(".zip", "")
-                    return ("loaded", model, name)
+                    return ("loaded", model, name, meta)
                 except Exception as e:
                     self.error = f"Failed to load model: {e}"
                     return ("continue", None)
-        if self.cancel_btn.handle_event(event):
+        if self.cancel_btn.handle_event(event) or self.back_btn.handle_event(event):
             return ("cancel", None)
         if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
             return ("cancel", None)
@@ -1085,7 +1156,7 @@ class ModelPicker:
 
         Label("Select AI Model", 48, Colors.WHITE, WIDTH // 2, 65).draw(self.screen)
         Label(
-            "Choose a trained model file to use for AI Play",
+            "Choose a model. PRNG type and interpreter are auto-configured from the model.",
             22,
             Colors.GRAY,
             WIDTH // 2,
@@ -1102,8 +1173,34 @@ class ModelPicker:
                 250,
             ).draw(self.screen)
 
-        for btn in self.buttons:
+        for idx, btn in enumerate(self.buttons):
             btn.draw(self.screen)
+            fname = self.models[idx]
+            name = fname.replace(".zip", "")
+            meta = self.meta[idx]
+
+            name_color = Colors.WHITE if meta else Colors.GRAY
+            Label(name, 26, name_color, btn.rect.centerx, btn.rect.y + 20).draw(
+                self.screen
+            )
+            if meta:
+                interp_label = self._interp_label(meta)
+                ms = meta.get("max_skip", "?")
+                Label(
+                    f"PRNG: {meta['prng_type']}   |   Interp: {interp_label}   |   Max Skip: {ms}",
+                    16,
+                    Colors.GRAY,
+                    btn.rect.centerx,
+                    btn.rect.y + 43,
+                ).draw(self.screen)
+            else:
+                Label(
+                    "No metadata — PRNG/interpreter unknown (select at your own risk)",
+                    16,
+                    Colors.DIM,
+                    btn.rect.centerx,
+                    btn.rect.y + 43,
+                ).draw(self.screen)
 
         if self.error:
             Label(self.error, 20, Colors.RED, WIDTH // 2, 170).draw(self.screen)
@@ -1171,13 +1268,13 @@ class App:
                 for e in events:
                     action = self.model_picker.handle_event(e)
                     if action[0] == "loaded":
-                        _, model, model_name = action
+                        _, model, model_name, meta = action
                         self.game = AIGame(
                             self.screen,
                             self.clock,
-                            self.ai_cfg["type"],
+                            meta["prng_type"],
                             self.ai_cfg["seed"],
-                            self.ai_cfg["params"],
+                            meta["params"],
                             model,
                             model_name,
                         )

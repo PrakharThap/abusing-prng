@@ -1,5 +1,6 @@
 import sys
 import os
+import json
 import argparse
 from sb3_contrib import RecurrentPPO
 from stable_baselines3.common.vec_env import DummyVecEnv
@@ -100,6 +101,21 @@ def main():
     path = os.path.join(args.output_dir, f"{model_name}.zip")
     model.save(path)
     print(f"Model saved to {path}")
+
+    meta_path = os.path.join(args.output_dir, f"{model_name}.json")
+    with open(meta_path, "w") as f:
+        json.dump(
+            {
+                "name": model_name,
+                "prng_type": args.prng,
+                "params": params,
+                "max_skip": args.max_skip,
+                "timesteps": args.timesteps,
+            },
+            f,
+            indent=2,
+        )
+    print(f"Metadata saved to {meta_path}")
 
     obs, _ = env.reset(seed=42)
     lstm_states = None
